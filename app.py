@@ -272,6 +272,7 @@ def build_learning_groups(
     df,
     group_size=5,
     random_state=42,
+    max_groups=10,
     strategy="balanced",
     target_skill_col="KN_ProblemSolving_norm",
     skill_cols=("KN_ProblemSolving_norm", "KN_Teamwork_norm", "KN_Communication_norm"),
@@ -286,10 +287,15 @@ def build_learning_groups(
 
     total_students = len(data)
     n_groups = max(1, math.ceil(total_students / group_size))
+    if max_groups is not None:
+        n_groups = min(n_groups, max(1, int(max_groups)))
+
+    # Nếu giới hạn số nhóm thấp hơn nhu cầu lý thuyết, tăng sức chứa hiệu dụng để vẫn xếp đủ SV.
+    effective_group_size = max(group_size, math.ceil(total_students / n_groups))
     groups = [{"name": f"Nhóm {i+1}", "members": []} for i in range(n_groups)]
 
     def available_group_indices():
-        return [i for i in range(n_groups) if len(groups[i]["members"]) < group_size]
+        return [i for i in range(n_groups) if len(groups[i]["members"]) < effective_group_size]
 
     if strategy == "homogeneous":
         # Gom nhóm theo cùng trình độ: cố gắng để độ đa dạng nhãn trong nhóm thấp.
@@ -321,10 +327,10 @@ def build_learning_groups(
 
         # 1) Tạo các nhóm can thiệp cho ALERT
         if len(alert_df) > 0:
-            n_alert_groups = max(1, math.ceil(len(alert_df) / group_size))
+            n_alert_groups = max(1, math.ceil(len(alert_df) / effective_group_size))
             for g in range(n_alert_groups):
-                start = g * group_size
-                end = start + group_size
+                start = g * effective_group_size
+                end = start + effective_group_size
                 chunk = alert_df.iloc[start:end]
                 for _, row in chunk.iterrows():
                     rec = row.to_dict()
@@ -336,7 +342,7 @@ def build_learning_groups(
         # 2) Chia phần OK theo chiến lược cân bằng
         if len(ok_df) > 0:
             ok_total = len(ok_df)
-            ok_n_groups = max(1, math.ceil(ok_total / group_size))
+            ok_n_groups = max(1, math.ceil(ok_total / effective_group_size))
             ok_groups = [{"name": f"Nhóm {i+1}", "members": []} for i in range(ok_n_groups)]
 
             level_order = ["Xuất sắc", "Giỏi", "Khá", "Trung bình", "Yếu (At Risk)"]
@@ -349,7 +355,9 @@ def build_learning_groups(
             for label in level_order:
                 while buckets[label]:
                     candidate_idx = [
-                        i for i in range(ok_n_groups) if len(ok_groups[i]["members"]) < group_size
+                        i
+                        for i in range(ok_n_groups)
+                        if len(ok_groups[i]["members"]) < effective_group_size
                     ]
                     if not candidate_idx:
                         break
@@ -416,6 +424,21 @@ def build_learning_groups(
             rows.append(rec)
 
     group_df = pd.DataFrame(rows)
+
+    # Chốt cứng giới hạn số nhóm (áp dụng cho mọi chiến lược, kể cả intervention).
+    if len(group_df) > 0 and max_groups is not None:
+        hard_limit = max(1, int(max_groups))
+        group_order = list(dict.fromkeys(group_df["Nhóm học tập"].astype(str).tolist()))
+        if len(group_order) > hard_limit:
+            keep_groups = group_order[:hard_limit]
+            overflow_groups = set(group_order[hard_limit:])
+            group_counts = group_df["Nhóm học tập"].value_counts().to_dict()
+
+            overflow_idx = group_df[group_df["Nhóm học tập"].isin(overflow_groups)].index.tolist()
+            for idx in overflow_idx:
+                target_group = min(keep_groups, key=lambda g: group_counts.get(g, 0))
+                group_df.at[idx, "Nhóm học tập"] = target_group
+                group_counts[target_group] = group_counts.get(target_group, 0) + 1
 
     # Trường hợp rất hiếm: còn sót do dữ liệu lỗi, thêm vào nhóm đang ít người nhất
     assigned_ids = set(group_df.get("StudentID", pd.Series(dtype=str)).astype(str).tolist())
@@ -589,7 +612,20 @@ else:
     selected_skill_col = skill_option_map["Giải quyết vấn đề (Problem Solving)"]
     selected_skill_label = "Giải quyết vấn đề (Problem Solving)"
 
-group_size = st.slider("Sĩ số mỗi nhóm", min_value=3, max_value=8, value=5, step=1)
+group_size = st.number_input(
+    "Sĩ số mỗi nhóm",
+    min_value=3,
+    max_value=8,
+    value=5,
+    step=1,
+)
+max_group_limit = st.number_input(
+    "Giới hạn tối đa số nhóm",
+    min_value=1,
+    max_value=50,
+    value=10,
+    step=1,
+)
 
 if run_btn:
     try:
@@ -677,6 +713,7 @@ if run_btn:
             final_df,
             group_size=group_size,
             random_state=42,
+            max_groups=max_group_limit,
             strategy=grouping_strategy,
             target_skill_col=selected_skill_col,
             skill_cols=tuple(skill_option_map.values()),
@@ -729,6 +766,8 @@ if run_btn:
             key=lambda col: col.map(LABEL_ORDER) if col.name == "Nhãn năng lực" else col,
         )
         st.dataframe(group_view, use_container_width=True, height=350)
+        actual_group_count = int(final_df["Nhóm học tập"].nunique())
+        st.caption(f"Tổng số nhóm thực tế: {actual_group_count} (giới hạn tối đa: {int(max_group_limit)}).")
 
         # KNN demo nhanh cho sinh viên mới (theo tiêu chí đã chọn)
         with st.expander("Dự đoán nhanh cho sinh viên mới bằng KNN (tùy chọn)"):
@@ -764,6 +803,17 @@ if run_btn:
             "Nhóm học tập",
         ]
         export_df = final_df[output_cols].copy()
+        export_df["__group_num"] = (
+            export_df["Nhóm học tập"]
+            .astype(str)
+            .str.extract(r"(\d+)")[0]
+            .fillna(9999)
+            .astype(int)
+        )
+        export_df = export_df.sort_values(
+            ["__group_num", "Nhãn năng lực", "StudentID"],
+            key=lambda col: col.map(LABEL_ORDER) if col.name == "Nhãn năng lực" else col,
+        ).drop(columns=["__group_num"])
         csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label="Download CSV kết quả cuối cùng",
