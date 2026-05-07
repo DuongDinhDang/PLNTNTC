@@ -32,7 +32,7 @@ def create_dummy_data(n_students=50, random_state=42):
     student_level = rng.integers(0, 5, size=n_students)
 
     data = {
-        "StudentID": student_ids,
+        "MSSV": student_ids,
         "Họ tên": full_names,
     }
 
@@ -83,36 +83,36 @@ def read_and_merge_uploaded_files(uploaded_files):
 
 def resolve_duplicate_student_ids(df, policy="keep_last"):
     """
-    Xử lý trùng StudentID sau khi gộp nhiều file.
+    Xử lý trùng MSSV sau khi gộp nhiều file.
     policy:
     - keep_first: giữ bản ghi xuất hiện trước
     - keep_last: giữ bản ghi xuất hiện sau
     - make_unique: giữ tất cả, thêm hậu tố _2, _3...
     """
     out_df = df.copy()
-    if "StudentID" not in out_df.columns:
+    if "MSSV" not in out_df.columns:
         return out_df, 0
 
-    sid_series = out_df["StudentID"].astype(str).str.strip()
-    sid_series = sid_series.replace({"": np.nan, "nan": np.nan, "None": np.nan})
-    out_df["StudentID"] = sid_series
+    sid_series = out_df["MSSV"].astype(str).str.strip()
+    sid_series = sid_series.replace({"":np.nan, "nan": np.nan, "None": np.nan})
+    out_df["MSSV"] = sid_series
 
-    dup_count = int(out_df["StudentID"].duplicated(keep=False).sum())
+    dup_count = int(out_df["MSSV"].duplicated(keep=False).sum())
     if dup_count == 0:
         return out_df, 0
 
     if policy == "keep_first":
-        out_df = out_df.drop_duplicates(subset=["StudentID"], keep="first")
+        out_df = out_df.drop_duplicates(subset=["MSSV"], keep="first")
         return out_df.reset_index(drop=True), dup_count
 
     if policy == "keep_last":
-        out_df = out_df.drop_duplicates(subset=["StudentID"], keep="last")
+        out_df = out_df.drop_duplicates(subset=["MSSV"], keep="last")
         return out_df.reset_index(drop=True), dup_count
 
     # make_unique
     seen = {}
     new_ids = []
-    for sid in out_df["StudentID"].tolist():
+    for sid in out_df["MSSV"].tolist():
         if pd.isna(sid):
             new_ids.append(sid)
             continue
@@ -124,7 +124,7 @@ def resolve_duplicate_student_ids(df, policy="keep_last"):
             seen[sid] += 1
             new_ids.append(f"{sid}_{seen[sid]}")
 
-    out_df["StudentID"] = new_ids
+    out_df["MSSV"] = new_ids
     return out_df, dup_count
 
 
@@ -441,8 +441,8 @@ def build_learning_groups(
                 group_counts[target_group] = group_counts.get(target_group, 0) + 1
 
     # Trường hợp rất hiếm: còn sót do dữ liệu lỗi, thêm vào nhóm đang ít người nhất
-    assigned_ids = set(group_df.get("StudentID", pd.Series(dtype=str)).astype(str).tolist())
-    remaining = data[~data["StudentID"].astype(str).isin(assigned_ids)]
+    assigned_ids = set(group_df.get("MSSV", pd.Series(dtype=str)).astype(str).tolist())
+    remaining = data[~data["MSSV"].astype(str).isin(assigned_ids)]
     if len(remaining) > 0 and len(group_df) > 0:
         for _, row in remaining.iterrows():
             sizes = group_df.groupby("Nhóm học tập").size().to_dict()
@@ -644,21 +644,21 @@ if run_btn:
         ensure_question_columns(raw_df)
 
         # Đảm bảo có cột định danh cơ bản
-        if "StudentID" not in raw_df.columns:
-            raw_df.insert(0, "StudentID", [f"SV{str(i).zfill(3)}" for i in range(1, len(raw_df) + 1)])
+        if "MSSV" not in raw_df.columns:
+            raw_df.insert(0, "MSSV", [f"SV{str(i).zfill(3)}" for i in range(1, len(raw_df) + 1)])
         if "Họ tên" not in raw_df.columns:
             raw_df.insert(1, "Họ tên", [f"Sinh viên {i}" for i in range(1, len(raw_df) + 1)])
 
-        # Làm sạch StudentID trùng do gộp file
+        # Làm sạch MSSV trùng do gộp file
         raw_df, duplicate_count = resolve_duplicate_student_ids(raw_df, policy=dedupe_policy)
         if duplicate_count > 0:
             if dedupe_policy == "make_unique":
                 st.warning(
-                    f"Phát hiện {duplicate_count} dòng có StudentID bị trùng. Đã tự đổi ID để giữ toàn bộ bản ghi."
+                    f"Phát hiện {duplicate_count} dòng có MSSV bị trùng. Đã tự đổi ID để giữ toàn bộ bản ghi."
                 )
             else:
                 st.warning(
-                    f"Phát hiện {duplicate_count} dòng có StudentID bị trùng. Đã xử lý theo lựa chọn: {dedupe_mode_label}."
+                    f"Phát hiện {duplicate_count} dòng có MSSV bị trùng. Đã xử lý theo lựa chọn: {dedupe_mode_label}."
                 )
 
         # Cột kỹ thuật chỉ dùng để truy vết file nguồn, không cần trong xử lý tiếp theo
@@ -721,8 +721,8 @@ if run_btn:
 
         # Đưa cột nhóm về final
         final_df = final_df.merge(
-            grouped_df[["StudentID", "Nhóm học tập"]].drop_duplicates(),
-            on="StudentID",
+            grouped_df[["MSSV", "Nhóm học tập"]].drop_duplicates(),
+            on="MSSV",
             how="left",
         )
 
@@ -754,7 +754,7 @@ if run_btn:
         group_view = final_df[
             [
                 "Nhóm học tập",
-                "StudentID",
+                "MSSV",
                 "Họ tên",
                 "Nhãn năng lực",
                 "Nhãn năng lực (tương đối)",
@@ -762,7 +762,7 @@ if run_btn:
                 "AIS_Cảnh báo",
             ]
         ].sort_values(
-            ["Nhóm học tập", "Nhãn năng lực", "StudentID"],
+            ["Nhóm học tập", "Nhãn năng lực", "MSSV"],
             key=lambda col: col.map(LABEL_ORDER) if col.name == "Nhãn năng lực" else col,
         )
         st.dataframe(group_view, use_container_width=True, height=350)
@@ -783,7 +783,7 @@ if run_btn:
 
         # Nút download kết quả
         output_cols = [
-            "StudentID",
+            "MSSV",
             "Họ tên",
             "TR",
             "KN",
@@ -811,7 +811,7 @@ if run_btn:
             .astype(int)
         )
         export_df = export_df.sort_values(
-            ["__group_num", "Nhãn năng lực", "StudentID"],
+            ["__group_num", "Nhãn năng lực", "MSSV"],
             key=lambda col: col.map(LABEL_ORDER) if col.name == "Nhãn năng lực" else col,
         ).drop(columns=["__group_num"])
         csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
