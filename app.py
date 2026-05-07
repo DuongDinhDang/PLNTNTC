@@ -1,10 +1,10 @@
 import math
+import unicodedata
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.cluster import KMeans
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import MinMaxScaler
 
 
@@ -15,6 +15,14 @@ st.set_page_config(page_title="ASK - Phân loại sinh viên thông minh", layou
 
 ABILITY_LABELS = ["Yếu (At Risk)", "Trung bình", "Khá", "Giỏi", "Xuất sắc"]
 LABEL_ORDER = {label: idx for idx, label in enumerate(ABILITY_LABELS)}
+
+LIKERT_MAP = {
+    "hoan toan khong dong y": 1,
+    "khong dong y": 2,
+    "phan van": 3,
+    "dong y": 4,
+    "hoan toan dong y": 5,
+}
 
 
 # ==========================================================
@@ -52,6 +60,62 @@ def create_dummy_data(n_students=50, random_state=42):
     return pd.DataFrame(data)
 
 
+def normalize_likert_value(value):
+    """Chuyển câu trả lời Likert dạng chữ sang thang điểm 1-5."""
+    if pd.isna(value):
+        return np.nan
+
+    if isinstance(value, (int, np.integer, float, np.floating)):
+        if pd.isna(value):
+            return np.nan
+        # Nếu là số, kiểm tra xem có nằm trong thang 1-5 không
+        if 1 <= value <= 5:
+            return value
+        return np.nan
+
+    text = str(value).strip().lower()
+
+    try:
+        numeric_value = float(text)
+        if 1 <= numeric_value <= 5:
+            if numeric_value.is_integer():
+                return int(numeric_value)
+            return numeric_value
+        return np.nan
+    except ValueError:
+        pass
+
+    normalized_text = "".join(
+        ch for ch in unicodedata.normalize("NFD", text)
+        if unicodedata.category(ch) != "Mn"
+    )
+    normalized_text = " ".join(normalized_text.split())
+
+    # Trả về giá trị từ map, hoặc NaN nếu không tìm thấy
+    result = LIKERT_MAP.get(normalized_text, np.nan)
+    return result
+
+
+def normalize_column_headers(df):
+    """Chuẩn hóa tên cột để phù hợp với các biến thể từ Google Form."""
+    col_mapping = {}
+    
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        
+        # Map tên sinh viên (Họ Tên / Họ tên / Họ Và Tên → Họ tên)
+        if col_lower in ["họ tên", "họ và tên"]:
+            col_mapping[col] = "Họ tên"
+        # Map MSSV (MSSV: / MSSV → MSSV)
+        elif col_lower == "mssv:":
+            col_mapping[col] = "MSSV"
+    
+    if col_mapping:
+        df = df.rename(columns=col_mapping)
+    
+    return df
+
+
 def read_uploaded_file(uploaded_file):
     """Đọc 1 file CSV/Excel từ uploader."""
     if uploaded_file is None:
@@ -59,11 +123,21 @@ def read_uploaded_file(uploaded_file):
 
     file_name = uploaded_file.name.lower()
     if file_name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    if file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-        return pd.read_excel(uploaded_file)
+        df = pd.read_csv(uploaded_file)
+    elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+        df = pd.read_excel(uploaded_file)
+    else:
+        raise ValueError(f"Định dạng file không hỗ trợ: {uploaded_file.name}")
 
-    raise ValueError(f"Định dạng file không hỗ trợ: {uploaded_file.name}")
+    # Chuẩn hóa tên cột
+    df = normalize_column_headers(df)
+
+    # Chuẩn hóa giá trị câu trả lời Likert
+    question_cols = [c for c in df.columns if str(c).startswith("Q")]
+    for col in question_cols:
+        df[col] = df[col].apply(normalize_likert_value)
+
+    return df
 
 
 def read_and_merge_uploaded_files(uploaded_files):
@@ -241,17 +315,6 @@ def run_kmeans_and_label(score_df, selected_feature_cols):
     labeled_df["Nhãn năng lực"] = labeled_df["ClusterID"].map(cluster_to_label)
 
     return labeled_df, kmeans
-
-
-def train_knn_classifier(df, selected_feature_cols):
-    """Huấn luyện KNN để sẵn sàng phân loại sinh viên mới."""
-    x_train = df[selected_feature_cols].to_numpy()
-    y_train = df["Nhãn năng lực"].to_numpy()
-
-    n_neighbors = min(5, len(df))
-    knn = KNeighborsClassifier(n_neighbors=n_neighbors)
-    knn.fit(x_train, y_train)
-    return knn
 
 
 def run_ais_alert(df):
@@ -507,11 +570,6 @@ criteria_table = pd.DataFrame(
             "Các tiêu chí cụ thể": "Tính chủ động (Proactivity); Sự kiên trì (Persistence); Kỷ luật & Chuyên cần",
             "Ý nghĩa đối với thuật toán": "Đầu vào quan trọng cho AIS để phát hiện sinh viên có nguy cơ bỏ học.",
         },
-        {
-            "Nhóm tiêu chí": "SL - Định lượng (Metrics)",
-            "Các tiêu chí cụ thể": "Tốc độ tiếp thu (Learning Speed); Số lượng bài tập đã hoàn thành; Tỉ lệ lỗi (Error Rate)",
-            "Ý nghĩa đối với thuật toán": "Cung cấp dữ liệu thực tế (Hard data) thay vì chỉ là khảo sát cảm tính.",
-        },
     ]
 )
 st.dataframe(criteria_table, use_container_width=True, hide_index=True, height=260)
@@ -536,21 +594,14 @@ with right_col:
         kn_2 = st.checkbox("Làm việc nhóm (Teamwork)", value=True, key="kn_2")
         kn_3 = st.checkbox("Thuyết trình & Giao tiếp", value=True, key="kn_3")
 
-    with st.expander("SL - Định lượng (Metrics)", expanded=False):
-        sl_1 = st.checkbox("Tốc độ tiếp thu (Learning Speed)", value=False, key="sl_1")
-        sl_2 = st.checkbox("Số lượng bài tập đã hoàn thành", value=False, key="sl_2")
-        sl_3 = st.checkbox("Tỉ lệ lỗi (Error Rate)", value=False, key="sl_3")
-
 use_tr = any([tr_1, tr_2, tr_3])
 use_kn = any([kn_1, kn_2, kn_3])
 use_a = any([a_1, a_2, a_3])
-use_sl = any([sl_1, sl_2, sl_3])
 
 criterion_map = {
     "TR": (use_tr, "TR_norm"),
     "KN": (use_kn, "KN_norm"),
     "A": (use_a, "A_norm"),
-    "SL": (use_sl, "SL_norm"),
 }
 
 selected_feature_cols = [col for _, (flag, col) in criterion_map.items() if flag]
@@ -574,12 +625,6 @@ if a_2:
     selected_criteria_labels.append("A: Sự kiên trì")
 if a_3:
     selected_criteria_labels.append("A: Kỷ luật & Chuyên cần")
-if sl_1:
-    selected_criteria_labels.append("SL: Tốc độ tiếp thu")
-if sl_2:
-    selected_criteria_labels.append("SL: Số lượng bài tập đã hoàn thành")
-if sl_3:
-    selected_criteria_labels.append("SL: Tỉ lệ lỗi")
 
 st.markdown("#### Chiến lược chia nhóm học tập")
 group_mode = st.radio(
@@ -687,21 +732,13 @@ if run_btn:
         clustered_df["ASK_Bách_phân_vị"] = (
             clustered_df["ASK_Điểm_tổng_hợp"].rank(pct=True, method="average") * 100
         ).round(1)
-        clustered_df["Nhãn năng lực (tương đối)"] = (
-            clustered_df["Nhãn năng lực"]
-            + " | P"
-            + clustered_df["ASK_Bách_phân_vị"].astype(str)
-        )
 
-        # 5) KNN classifier (sẵn sàng cho sinh viên mới)
-        knn_model = train_knn_classifier(clustered_df, selected_feature_cols)
-
-        # 6) AIS cảnh báo
+        # 5) AIS cảnh báo
         final_df = run_ais_alert(clustered_df)
 
         final_df["Điểm kỹ năng mục tiêu"] = final_df[selected_skill_col].round(3)
 
-        # 7) DS - chia nhóm học tập
+        # 6) DS - chia nhóm học tập
         if group_mode.startswith("Cân bằng"):
             grouping_strategy = "balanced"
         elif group_mode.startswith("Đồng nhất"):
@@ -769,51 +806,20 @@ if run_btn:
         actual_group_count = int(final_df["Nhóm học tập"].nunique())
         st.caption(f"Tổng số nhóm thực tế: {actual_group_count} (giới hạn tối đa: {int(max_group_limit)}).")
 
-        # KNN demo nhanh cho sinh viên mới (theo tiêu chí đã chọn)
-        with st.expander("Dự đoán nhanh cho sinh viên mới bằng KNN (tùy chọn)"):
-            st.write("Nhập các điểm đã chuẩn hóa (0.0 - 1.0) theo tiêu chí đang chọn.")
-            new_point = []
-            for feature in selected_feature_cols:
-                val = st.slider(f"{feature}", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
-                new_point.append(val)
-
-            if st.button("Dự đoán nhãn cho sinh viên mới"):
-                pred = knn_model.predict([new_point])[0]
-                st.success(f"KNN dự đoán: {pred}")
-
         # Nút download kết quả
         output_cols = [
             "MSSV",
             "Họ tên",
-            "TR",
-            "KN",
-            "A",
-            "SL",
-            "TR_norm",
-            "KN_norm",
-            "A_norm",
-            "SL_norm",
-            "ClusterID",
             "Nhãn năng lực",
-            "ASK_Điểm_tổng_hợp",
-            "ASK_Bách_phân_vị",
-            "Nhãn năng lực (tương đối)",
-            "Điểm kỹ năng mục tiêu",
-            "AIS_Cảnh báo",
             "Nhóm học tập",
         ]
         export_df = final_df[output_cols].copy()
-        export_df["__group_num"] = (
-            export_df["Nhóm học tập"]
-            .astype(str)
-            .str.extract(r"(\d+)")[0]
-            .fillna(9999)
-            .astype(int)
-        )
-        export_df = export_df.sort_values(
-            ["__group_num", "Nhãn năng lực", "MSSV"],
-            key=lambda col: col.map(LABEL_ORDER) if col.name == "Nhãn năng lực" else col,
-        ).drop(columns=["__group_num"])
+        
+        # Sắp xếp theo nhóm học tập rồi MSSV
+        export_df["MSSV"] = export_df["MSSV"].astype(str)
+        export_df["Nhóm học tập"] = export_df["Nhóm học tập"].astype(str)
+        export_df = export_df.sort_values(["Nhóm học tập", "MSSV"])
+        
         csv_data = export_df.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label="Download CSV kết quả cuối cùng",
