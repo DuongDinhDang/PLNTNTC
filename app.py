@@ -7,6 +7,17 @@ import streamlit as st
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import MinMaxScaler
 
+from group_management import (
+    rename_group,
+    remove_student_from_group,
+    delete_group,
+    get_group_list,
+    get_group_members,
+    move_student_to_group,
+    merge_groups,
+    split_group,
+)
+
 
 # ==========================================================
 # Module 0: Cấu hình chung
@@ -808,6 +819,122 @@ if run_btn:
         st.dataframe(group_view, use_container_width=True, height=350)
         actual_group_count = int(final_df["Nhóm học tập"].nunique())
         st.caption(f"Tổng số nhóm thực tế: {actual_group_count} (giới hạn tối đa: {int(max_group_limit)}).")
+
+        # --------------------------------------------------
+        # QUẢN LÝ NHÓM
+        # --------------------------------------------------
+        st.subheader("4) Quản lý nhóm học tập")
+        
+        with st.expander("🔧 Công cụ chỉnh sửa nhóm", expanded=False):
+            tab1, tab2, tab3, tab4 = st.tabs(["Đổi tên nhóm", "Xóa thành viên", "Xóa nhóm", "Di chuyển sinh viên"])
+            
+            with tab1:
+                st.markdown("#### Đổi tên nhóm học tập")
+                col1, col2 = st.columns(2)
+                with col1:
+                    groups_list = get_group_list(final_df)
+                    old_group_name = st.selectbox(
+                        "Chọn nhóm cần đổi tên",
+                        options=groups_list,
+                        key="rename_group_select"
+                    )
+                with col2:
+                    new_group_name = st.text_input(
+                        "Tên nhóm mới",
+                        placeholder="Ví dụ: Nhóm A, Nhóm Đỏ",
+                        key="rename_group_input"
+                    )
+                
+                if st.button("✓ Xác nhận đổi tên", key="rename_confirm"):
+                    if new_group_name.strip():
+                        final_df = rename_group(final_df, old_group_name, new_group_name.strip())
+                        st.success(f"✓ Đã đổi tên '{old_group_name}' → '{new_group_name.strip()}'")
+                        st.rerun()
+                    else:
+                        st.error("Tên nhóm mới không được để trống!")
+            
+            with tab2:
+                st.markdown("#### Xóa sinh viên khỏi nhóm")
+                col1, col2 = st.columns(2)
+                with col1:
+                    groups_list = get_group_list(final_df)
+                    selected_group = st.selectbox(
+                        "Chọn nhóm",
+                        options=groups_list,
+                        key="remove_student_group"
+                    )
+                    
+                    group_members_df = get_group_members(final_df, selected_group)
+                    members_list = group_members_df[["MSSV", "Họ tên"]].apply(
+                        lambda row: f"{row['MSSV']} - {row['Họ tên']}", axis=1
+                    ).tolist()
+                
+                with col2:
+                    if members_list:
+                        student_to_remove = st.selectbox(
+                            "Chọn sinh viên cần xóa",
+                            options=members_list,
+                            key="remove_student_select"
+                        )
+                        mssv_to_remove = student_to_remove.split(" - ")[0]
+                    else:
+                        st.warning("Nhóm này không có sinh viên!")
+                        mssv_to_remove = None
+                
+                if mssv_to_remove and st.button("✓ Xác nhận xóa sinh viên", key="remove_confirm"):
+                    final_df = remove_student_from_group(final_df, mssv_to_remove)
+                    st.success(f"✓ Đã xóa sinh viên {mssv_to_remove} khỏi nhóm")
+                    st.rerun()
+            
+            with tab3:
+                st.markdown("#### Xóa toàn bộ nhóm")
+                groups_list = get_group_list(final_df)
+                group_to_delete = st.selectbox(
+                    "Chọn nhóm cần xóa",
+                    options=groups_list,
+                    key="delete_group_select"
+                )
+                
+                group_info = get_group_members(final_df, group_to_delete)
+                st.warning(f"⚠️ Nhóm '{group_to_delete}' có {len(group_info)} sinh viên. Việc xóa sẽ loại bỏ tất cả!")
+                
+                if st.button("✓ Xác nhận xóa nhóm", key="delete_confirm"):
+                    final_df = delete_group(final_df, group_to_delete)
+                    st.success(f"✓ Đã xóa nhóm '{group_to_delete}'")
+                    st.rerun()
+            
+            with tab4:
+                st.markdown("#### Di chuyển sinh viên sang nhóm khác")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    all_students = final_df[["MSSV", "Họ tên"]].apply(
+                        lambda row: f"{row['MSSV']} - {row['Họ tên']}", axis=1
+                    ).tolist()
+                    student_to_move = st.selectbox(
+                        "Chọn sinh viên",
+                        options=all_students,
+                        key="move_student_select"
+                    )
+                    mssv_to_move = student_to_move.split(" - ")[0]
+                
+                with col2:
+                    groups_list = get_group_list(final_df)
+                    target_group = st.selectbox(
+                        "Nhóm đích",
+                        options=groups_list,
+                        key="move_target_group"
+                    )
+                
+                if st.button("✓ Xác nhận di chuyển", key="move_confirm"):
+                    # Kiểm tra sinh viên đã thuộc nhóm nào
+                    current_group = final_df[final_df["MSSV"].astype(str) == mssv_to_move]["Nhóm học tập"].iloc[0]
+                    if current_group != target_group:
+                        final_df = move_student_to_group(final_df, mssv_to_move, target_group)
+                        st.success(f"✓ Đã di chuyển {mssv_to_move} từ '{current_group}' → '{target_group}'")
+                        st.rerun()
+                    else:
+                        st.warning(f"Sinh viên {mssv_to_move} đã ở nhóm {target_group} rồi!")
 
         # Nút download kết quả
         output_cols = [
