@@ -798,7 +798,6 @@ if run_btn:
                 "MSSV",
                 "Họ tên",
                 "Nhãn năng lực",
-                "Nhãn năng lực (tương đối)",
                 "Điểm kỹ năng mục tiêu",
                 "AIS_Cảnh báo",
             ]
